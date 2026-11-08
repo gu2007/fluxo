@@ -1,14 +1,37 @@
 // Banco de dados SQLite: cria as tabelas na primeira execução e insere categorias padrão.
 const path = require('path');
 const fs = require('fs');
-const Database = require('better-sqlite3');
+// SQLite embutido no próprio Node (22.13+): não precisa compilar nada no servidor.
+const { DatabaseSync } = require('node:sqlite');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const db = new Database(path.join(DATA_DIR, 'fluxo.db'));
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+const db = new DatabaseSync(path.join(DATA_DIR, 'fluxo.db'));
+db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 3000;');
+
+// db.transaction(fn): roda fn dentro de BEGIN/COMMIT (desfaz tudo se der erro).
+db.transaction = (fn) => (...args) => {
+  db.exec('BEGIN');
+  try { const r = fn(...args); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; }
+};
+
+// Permite passar objetos com campos a mais nos parâmetros nomeados (@campo):
+// só os campos usados no SQL são enviados ao banco.
+const prepareOriginal = db.prepare.bind(db);
+db.prepare = (sql) => {
+  const st = prepareOriginal(sql);
+  const nomes = [...new Set([...sql.matchAll(/@(\w+)/g)].map((m) => m[1]))];
+  if (!nomes.length) return st;
+  const filtra = (args) => (args.length === 1 && args[0] && typeof args[0] === 'object'
+    ? [Object.fromEntries(nomes.map((n) => [n, args[0][n] === undefined ? null : args[0][n]]))]
+    : args);
+  return {
+    run: (...a) => st.run(...filtra(a)),
+    get: (...a) => st.get(...filtra(a)),
+    all: (...a) => st.all(...filtra(a)),
+  };
+};
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS usuarios (

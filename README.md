@@ -2,7 +2,7 @@
 
 Aplicativo web de controle financeiro pessoal, feito para funcionar bem no celular (instalável como app) e no computador.
 
-![Node.js](https://img.shields.io/badge/Node.js-Express_5-12B886) ![SQLite](https://img.shields.io/badge/banco-SQLite-0B1B2B)
+![Node.js](https://img.shields.io/badge/Node.js-Express_5-12B886) ![SQLite](https://img.shields.io/badge/banco-SQLite_(node:sqlite)-0B1B2B)
 
 ## Funcionalidades
 
@@ -23,7 +23,7 @@ Aplicativo web de controle financeiro pessoal, feito para funcionar bem no celul
 | Camada | Tecnologia |
 |---|---|
 | Back-end | Node.js, Express 5 |
-| Banco | SQLite (better-sqlite3), valores em centavos (inteiros) |
+| Banco | SQLite embutido no Node (`node:sqlite`), sem dependência nativa, valores em centavos (inteiros) |
 | Front-end | HTML, CSS e JavaScript puro (SPA com rotas por hash), Chart.js |
 | Deploy | Oracle Cloud VPS · PM2 · Nginx (proxy reverso) · Let's Encrypt |
 

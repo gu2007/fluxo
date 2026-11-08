@@ -1,4 +1,11 @@
 // Fluxo — servidor principal.
+
+// Esconde o aviso "SQLite is an experimental feature" do Node (o resto dos avisos continua aparecendo).
+const emitWarningOriginal = process.emitWarning;
+process.emitWarning = (aviso, ...resto) => {
+  if (String(aviso && aviso.message ? aviso.message : aviso).includes('SQLite')) return;
+  return emitWarningOriginal.call(process, aviso, ...resto);
+};
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
