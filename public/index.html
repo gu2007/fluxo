@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Fluxo · Finanças</title>
+  <meta name="theme-color" content="#0B1B2B">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <!-- Tela de login / primeiro acesso -->
+  <section id="auth" class="auth" hidden>
+    <div class="auth-card">
+      <div class="brand brand-lg"><span class="logo"></span><span>Fluxo</span></div>
+      <p class="auth-sub" id="auth-sub">Entre para ver suas finanças.</p>
+      <form id="auth-form" autocomplete="on">
+        <label>Usuário<input name="usuario" autocomplete="username" required minlength="3"></label>
+        <label>Senha<input name="senha" type="password" autocomplete="current-password" required minlength="6"></label>
+        <p class="form-erro" id="auth-erro"></p>
+        <button class="btn btn-primary btn-block" id="auth-btn">Entrar</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- App -->
+  <div id="app" class="app" hidden>
+    <aside class="sidebar">
+      <div class="brand"><span class="logo"></span><span>Fluxo</span></div>
+      <button class="btn btn-primary btn-block novo-desk" data-novo="despesa">＋ Novo lançamento</button>
+      <nav class="side-nav" id="side-nav"></nav>
+      <div class="side-foot">
+        <span id="user-nome"></span>
+        <button class="link" id="sair">Sair</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <h1 id="titulo">Painel</h1>
+        <div class="mes-nav" id="mes-nav">
+          <button class="icon-btn" data-mes="-1" aria-label="Mês anterior">‹</button>
+          <button class="mes-label" id="mes-label" data-mes="0"></button>
+          <button class="icon-btn" data-mes="1" aria-label="Próximo mês">›</button>
+        </div>
+      </header>
+      <div id="view" class="view"></div>
+    </main>
+
+    <nav class="tabbar" id="tabbar"></nav>
+    <button class="fab" id="fab" aria-label="Novo lançamento">＋</button>
+  </div>
+
+  <!-- Folha (modal) -->
+  <div class="sheet-bg" id="sheet-bg" hidden>
+    <div class="sheet" role="dialog" aria-modal="true">
+      <div class="sheet-handle"></div>
+      <div id="sheet-body"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="/vendor/chart.umd.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
