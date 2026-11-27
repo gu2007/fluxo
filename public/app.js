@@ -81,6 +81,9 @@
     categorias: { titulo: 'Categorias', ic: 'cat', mes: false, render: viewCategorias },
     ajustes: { titulo: 'Ajustes', ic: 'ajustes', mes: false, render: viewAjustes },
     mais: { titulo: 'Mais', ic: 'mais', mes: false, render: viewMais },
+    tipo: { titulo: 'Resumo', mes: true, voltar: true, render: viewTipo },
+    categoria: { titulo: 'Categoria', mes: true, voltar: true, render: viewCategoria },
+    conta: { titulo: 'Conta', mes: true, voltar: true, render: viewConta },
   };
   const NAV_LATERAL = ['painel', 'lancamentos', 'cartoes', 'contas', 'relatorios', 'orcamentos', 'categorias', 'ajustes'];
   const NAV_TAB = ['painel', 'lancamentos', null, 'cartoes', 'mais'];
@@ -98,10 +101,11 @@
   async function render() {
     const { nome, arg } = rotaAtual();
     const R = ROTAS[nome];
-    const grupo = { cartao: 'cartoes', contas: 'mais', orcamentos: 'mais', categorias: 'mais', ajustes: 'mais', relatorios: 'mais' };
+    const grupo = { cartao: 'cartoes', contas: 'mais', orcamentos: 'mais', categorias: 'mais', ajustes: 'mais', relatorios: 'mais', tipo: 'painel', categoria: 'painel', conta: 'mais' };
     $$('#side-nav a').forEach((a) => a.classList.toggle('ativo', a.dataset.r === nome || (nome === 'cartao' && a.dataset.r === 'cartoes')));
     $$('#tabbar a').forEach((a) => a.classList.toggle('ativo', a.dataset.r === nome || a.dataset.r === grupo[nome]));
-    $('#titulo').textContent = R.titulo;
+    $('#titulo').innerHTML = (R.voltar || nome === 'cartao' ? '<button class="voltar" id="voltar" aria-label="Voltar">‹</button>' : '') + esc(R.titulo);
+    const bv = $('#voltar'); if (bv) bv.onclick = () => (history.length > 1 ? history.back() : (location.hash = '#/painel'));
     $('#mes-nav').hidden = !R.mes;
     $('#mes-label').textContent = nomeMes(S.mes);
     S.charts.forEach((c) => c.destroy()); S.charts = [];
@@ -114,15 +118,30 @@
   }
 
   // ============ componentes ============
+  // Nome da categoria com a mãe na frente: "Moto › Combustível"
+  const nomeCat = (t) => (t.cat_pai_nome ? `${t.cat_pai_nome} › ${t.cat_nome}` : t.cat_nome);
+
+  // Árvore de categorias de um tipo: principais com suas filhas.
+  function arvore(cats, tipo) {
+    const doTipo = cats.filter((c) => c.tipo === tipo);
+    return doTipo.filter((c) => !c.parent_id).map((p) => ({ ...p, filhos: doTipo.filter((c) => c.parent_id === p.id) }));
+  }
+  // <option>s de categoria com as subcategorias recuadas embaixo da principal.
+  const opcoesCategoria = (cats, tipo, sel) => arvore(cats, tipo).map((p) =>
+    `<option value="${p.id}" ${p.id == sel ? 'selected' : ''}>${esc(p.icone)} ${esc(p.nome)}${p.filhos.length ? ' (geral)' : ''}</option>` +
+    p.filhos.map((f) => `<option value="${f.id}" ${f.id == sel ? 'selected' : ''}>\u00A0\u00A0\u00A0\u21B3 ${esc(f.nome)}</option>`).join('')).join('');
+
+  const rotaCategoria = (id, tipo) => `#/categoria/${id || `0-${tipo || 'despesa'}`}`;
+
   function itemTransacao(t, opts = {}) {
     const ehReceita = t.tipo === 'receita';
     const ehTransf = t.tipo === 'transferencia';
     const ehFatura = t.tipo === 'pagamento_fatura';
     const icone = ehTransf ? '⇄' : ehFatura ? '💳' : (t.cat_icone || '📦');
     const corFundo = ehTransf || ehFatura ? 'var(--bg)' : `${t.cat_cor || '#94A3B8'}22`;
+    const cn = opts.semCategoria ? '' : (nomeCat(t) || (ehFatura ? 'Pagamento de fatura' : 'Sem categoria'));
     let sub = ehTransf ? `${esc(t.conta_nome)} → ${esc(t.conta_destino_nome)}`
-      : t.cartao_id ? `${esc(t.cat_nome || 'Sem categoria')} · ${esc(t.cartao_nome)}`
-      : `${esc(t.cat_nome || (ehFatura ? 'Pagamento de fatura' : 'Sem categoria'))} · ${esc(t.conta_nome || '')}`;
+      : [cn, t.cartao_id ? `💳 ${t.cartao_nome || ''}` : t.conta_nome].filter(Boolean).map(esc).join(' · ');
     if (opts.comData) sub = `${dataBR(t.data)} · ${sub}`;
     const parc = t.total_parcelas ? `<span class="tag">${t.parcela}/${t.total_parcelas}</span>` : '';
     const pend = !t.pago ? '<span class="tag warn">pendente</span>' : '';
@@ -166,22 +185,59 @@
     </div>`;
   }
 
-  function graficoRosca(canvas, dados) {
-    if (!window.Chart || !dados.length) return;
+  function graficoRosca(canvas, dados, tipo) {
+    if (!window.Chart || !dados.length || !canvas) return;
     S.charts.push(new Chart(canvas, {
       type: 'doughnut',
       data: { labels: dados.map((d) => d.nome), datasets: [{ data: dados.map((d) => d.total / 100), backgroundColor: dados.map((d) => d.cor), borderWidth: 0, hoverOffset: 6 }] },
-      options: { cutout: '68%', maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => ` ${c.label}: ${fmt.format(c.raw)}` } } } },
+      options: {
+        cutout: '68%', maintainAspectRatio: false,
+        onClick: (e, els) => { if (tipo && els.length && dados[els[0].index].id !== undefined) location.hash = rotaCategoria(dados[els[0].index].id, tipo); },
+        onHover: (e, els) => { if (tipo) e.native.target.style.cursor = els.length ? 'pointer' : 'default'; },
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => ` ${c.label}: ${fmt.format(c.raw)}` } } },
+      },
     }));
   }
 
-  function legendaCategorias(dados) {
-    const total = dados.reduce((s, d) => s + d.total, 0) || 1;
-    return `<div class="legenda">${dados.map((d) => `<div class="item">
+  // Lista de categorias com barra e %; cada linha é clicável (data-cat).
+  function legendaCategorias(dados, totalRef) {
+    const total = totalRef || dados.reduce((s, d) => s + d.total, 0) || 1;
+    return `<div class="legenda">${dados.map((d) => `<div class="item clic" data-cat="${d.id}">
       <div class="avatar" style="background:${d.cor}22">${esc(d.icone)}</div>
       <div class="item-main"><div class="item-tit">${esc(d.nome)}</div><div class="barra"><i style="width:${(d.total / total) * 100}%;background:${d.cor}"></i></div></div>
-      <div class="item-val">${brl(d.total, true)}<small>${Math.round((d.total / total) * 100)}%</small></div></div>`).join('')}</div>`;
+      <div class="item-val">${brl(d.total, true)}<small>${Math.round((d.total / total) * 100)}%</small></div><span class="seta">›</span></div>`).join('')}</div>`;
   }
+  function ligarCategorias(el, tipo) {
+    $$('[data-cat]', el).forEach((n) => (n.onclick = () => (location.hash = rotaCategoria(Number(n.dataset.cat), tipo))));
+  }
+
+  function graficoBarras(canvas, labels, valores, cor) {
+    if (!window.Chart || !canvas) return;
+    const escuro = matchMedia('(prefers-color-scheme: dark)').matches;
+    const texto = escuro ? '#8DA0B3' : '#6A7889';
+    S.charts.push(new Chart(canvas, {
+      type: 'bar',
+      data: { labels, datasets: [{ data: valores, backgroundColor: valores.map((_, i) => (i === valores.length - 1 ? cor : cor + '66')), borderRadius: 6, maxBarThickness: 28 }] },
+      options: {
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => ' ' + fmt.format(c.raw) } } },
+        scales: { x: { grid: { display: false }, ticks: { color: texto } }, y: { display: false, beginAtZero: true } },
+      },
+    }));
+  }
+
+  // Lista de lançamentos agrupada por dia.
+  const listaPorDia = (lista, opts) => {
+    const porDia = {};
+    lista.forEach((t) => (porDia[t.data] = porDia[t.data] || []).push(t));
+    return Object.entries(porDia).map(([dia, ts]) => `<div class="dia">${diaSemana(dia)}</div><div class="lista">${ts.map((t) => itemTransacao(t, opts)).join('')}</div>`).join('');
+  };
+
+  const variacao = (atual, anterior) => {
+    if (!anterior) return '';
+    const p = Math.round(((atual - anterior) / anterior) * 100);
+    return `<span class="var ${p > 0 ? 'sobe' : 'desce'}">${p > 0 ? '▲' : '▼'} ${Math.abs(p)}% vs mês anterior</span>`;
+  };
 
   // ============ telas ============
   async function viewPainel(el) {
@@ -193,22 +249,22 @@
         <div><div class="hero-label">Saldo em contas <button class="olho" id="olho">${S.oculto ? '👁‍🗨' : '👁'}</button></div>
           <div class="hero-valor">${brl(d.saldo_total)}</div></div>
         <div class="hero-row">
-          <div class="hero-pill"><span class="dot in">↑</span><div><small>Receitas</small><b>${brl(totais.receitas)}</b></div></div>
-          <div class="hero-pill"><span class="dot out">↓</span><div><small>Despesas</small><b>${brl(totais.despesas)}</b></div></div>
+          <a class="hero-pill clic" href="#/tipo/receita"><span class="dot in">↑</span><div><small>↑ Receitas</small><b>${brl(totais.receitas)}</b></div><span class="seta">›</span></a>
+          <a class="hero-pill clic" href="#/tipo/despesa"><span class="dot out">↓</span><div><small>↓ Despesas</small><b>${brl(totais.despesas)}</b></div><span class="seta">›</span></a>
         </div>
       </section>
 
       <div class="grid-2">
-        <div class="card"><h2>Despesas por categoria <a class="link" href="#/relatorios">Ver mais</a></h2>
-          ${d.despesas_por_categoria.length ? `<div class="chart-box" style="height:200px"><canvas id="ch-cat"></canvas></div>${legendaCategorias(d.despesas_por_categoria.slice(0, 5))}` : vazio('🥳', 'Nenhuma despesa neste mês.')}
+        <div class="card" id="card-cat"><h2>Despesas por categoria <a class="link" href="#/tipo/despesa">Ver todas</a></h2>
+          ${d.despesas_por_categoria.length ? `<div class="chart-box" style="height:200px"><canvas id="ch-cat"></canvas></div>${legendaCategorias(d.despesas_por_categoria.slice(0, 6), totais.despesas)}` : vazio('🥳', 'Nenhuma despesa neste mês.')}
         </div>
         <div style="display:grid;gap:18px;align-content:start">
-          <div class="card"><h2>Balanço do mês</h2>
+          <div class="card clic-card" id="balanco"><h2>Balanço do mês <span class="seta">›</span></h2>
             <div class="item-val ${balanco >= 0 ? 'pos' : 'neg'}" style="text-align:left;font-size:26px">${balanco >= 0 ? '+' : '−'} ${brl(Math.abs(balanco))}</div>
             ${totais.receitas_pendentes || totais.despesas_pendentes ? `<div class="item-sub" style="margin-top:4px">A receber ${brl(totais.receitas_pendentes)} · A pagar ${brl(totais.despesas_pendentes)}</div>` : ''}
           </div>
           <div class="card"><h2>Contas <a class="link" href="#/contas">Gerenciar</a></h2>
-            <div class="lista">${d.contas.length ? d.contas.map((c) => `<div class="item"><div class="avatar" style="background:${c.cor}22;color:${c.cor}">${IC.contas}</div><div class="item-main"><div class="item-tit">${esc(c.nome)}</div><div class="item-sub">${tipoConta(c.tipo)}</div></div><div class="item-val ${c.saldo < 0 ? 'neg' : ''}">${brl(c.saldo)}</div></div>`).join('') : vazio('🏦', 'Cadastre sua primeira conta para começar.<br><br><button class="btn btn-primary" id="nova-conta">Adicionar conta</button>')}</div>
+            <div class="lista">${d.contas.length ? d.contas.map((c) => `<a class="item clic" href="#/conta/${c.id}"><div class="avatar" style="background:${c.cor}22;color:${c.cor}">${IC.contas}</div><div class="item-main"><div class="item-tit">${esc(c.nome)}</div><div class="item-sub">${tipoConta(c.tipo)}</div></div><div class="item-val ${c.saldo < 0 ? 'neg' : ''}">${brl(c.saldo)}</div><span class="seta">›</span></a>`).join('') : vazio('🏦', 'Cadastre sua primeira conta para começar.<br><br><button class="btn btn-primary" id="nova-conta">Adicionar conta</button>')}</div>
           </div>
         </div>
       </div>
@@ -224,11 +280,13 @@
     `;
     $('#olho').onclick = () => { S.oculto = !S.oculto; store.set('fluxo.oculto', S.oculto); render(); };
     const nc = $('#nova-conta'); if (nc) nc.onclick = () => abrirConta();
-    graficoRosca($('#ch-cat'), d.despesas_por_categoria);
+    graficoRosca($('#ch-cat'), d.despesas_por_categoria, 'despesa');
+    ligarCategorias($('#card-cat'), 'despesa');
+    $('#balanco').onclick = () => { S.filtro.tipo = ''; location.hash = '#/lancamentos'; };
     ligarTransacoes($('#pend'), d.pendentes);
     ligarTransacoes($('#ult'), d.ultimas);
     $$('[data-cc]', el).forEach((n) => (n.onclick = () => (location.hash = `#/cartao/${n.dataset.cc}`)));
-    $$('[data-orc]', el).forEach((n) => (n.onclick = () => (location.hash = '#/orcamentos')));
+    $$('[data-orc]', el).forEach((n) => (n.onclick = () => (location.hash = rotaCategoria(Number(n.dataset.orc)))));
   }
 
   S.filtro = { tipo: '', busca: '' };
@@ -239,18 +297,16 @@
     const lista = await api(`/transacoes?${q}`);
     const rec = lista.filter((t) => t.tipo === 'receita').reduce((s, t) => s + t.valor, 0);
     const des = lista.filter((t) => t.tipo === 'despesa').reduce((s, t) => s + t.valor, 0);
-    const porDia = {};
-    lista.forEach((t) => (porDia[t.data] = porDia[t.data] || []).push(t));
     const filtros = [['', 'Todos'], ['despesa', 'Despesas'], ['receita', 'Receitas'], ['transferencia', 'Transferências'], ['pendentes', 'Pendentes']];
     el.innerHTML = `
       <div class="chips">${filtros.map(([k, n]) => `<button class="chip ${S.filtro.tipo === k ? 'ativo' : ''}" data-f="${k}">${n}</button>`).join('')}</div>
       <input id="busca" type="search" placeholder="Buscar pela descrição…" value="${esc(S.filtro.busca)}">
       <div class="resumo">
-        <div><small>Receitas</small><b class="pos">${brl(rec, true)}</b></div>
-        <div><small>Despesas</small><b class="neg">${brl(des, true)}</b></div>
+        <a class="clic" href="#/tipo/receita"><small>Receitas ›</small><b class="pos">${brl(rec, true)}</b></a>
+        <a class="clic" href="#/tipo/despesa"><small>Despesas ›</small><b class="neg">${brl(des, true)}</b></a>
         <div><small>Balanço</small><b class="${rec - des >= 0 ? 'pos' : 'neg'}">${brl(rec - des, true)}</b></div>
       </div>
-      <div class="card" id="lst">${lista.length ? Object.entries(porDia).map(([dia, ts]) => `<div class="dia">${diaSemana(dia)}</div><div class="lista">${ts.map((t) => itemTransacao(t)).join('')}</div>`).join('') : vazio('🔍', 'Nenhum lançamento neste mês com esse filtro.')}</div>
+      <div class="card" id="lst">${lista.length ? listaPorDia(lista) : vazio('🔍', 'Nenhum lançamento neste mês com esse filtro.')}</div>
       <a class="link" href="/api/exportar.csv" style="justify-self:center">⬇ Exportar tudo em planilha (CSV)</a>`;
     $$('[data-f]', el).forEach((b) => (b.onclick = () => { S.filtro.tipo = b.dataset.f; render(); }));
     const busca = $('#busca');
@@ -289,12 +345,26 @@
         <button class="btn btn-ghost" id="edit-cc">Editar cartão</button>
         <a class="btn btn-ghost" href="#/cartoes" style="text-decoration:none">Voltar</a>
       </div>
-      <div class="card"><h2>Compras nesta fatura <span class="item-sub">${f.itens.length} ${f.itens.length === 1 ? 'item' : 'itens'}</span></h2>
-        <div class="lista" id="itens">${f.itens.length ? f.itens.map((t) => itemTransacao({ ...t, cartao_nome: f.cartao.nome }, { comData: true })).join('') : vazio('🧾', 'Nenhuma compra nesta fatura.')}</div></div>`;
+      ${f.por_categoria.length > 1 ? `<div class="card" id="fat-cat"><h2>Onde foi gasto <span class="item-sub">toque para filtrar</span></h2>${legendaCategorias(f.por_categoria, f.total)}</div>` : ''}
+      <div class="card"><h2><span id="tit-itens">Compras nesta fatura</span> <span class="item-sub" id="qtd-itens"></span></h2>
+        <div id="filtro-fat"></div>
+        <div class="lista" id="itens"></div></div>`;
+    const itens = f.itens.map((t) => ({ ...t, cartao_nome: f.cartao.nome }));
+    const mostrar = (catId) => {
+      const lista = catId === undefined ? itens : itens.filter((t) => (t.cat_pai_id || t.categoria_id || 0) === catId);
+      const g = f.por_categoria.find((x) => x.id === catId);
+      $('#filtro-fat').innerHTML = g ? `<button class="chip ativo" id="limpa-fat">${esc(g.icone)} ${esc(g.nome)} · ${brl(g.total, true)} ✕</button> <a class="link" href="${rotaCategoria(g.id)}">Ver categoria ›</a>` : '';
+      $('#qtd-itens').textContent = `${lista.length} ${lista.length === 1 ? 'item' : 'itens'}`;
+      $('#itens').innerHTML = lista.length ? lista.map((t) => itemTransacao(t, { comData: true })).join('') : vazio('🧾', 'Nenhuma compra nesta fatura.');
+      ligarTransacoes($('#itens'), lista);
+      const lf = $('#limpa-fat'); if (lf) lf.onclick = () => mostrar();
+      $$('#fat-cat [data-cat]').forEach((n) => n.classList.toggle('sel', Number(n.dataset.cat) === catId));
+    };
+    mostrar();
+    $$('#fat-cat [data-cat]').forEach((n) => (n.onclick = () => { const id = Number(n.dataset.cat); mostrar($('#limpa-fat') && n.classList.contains('sel') ? undefined : id); }));
     $$('[data-fm]', el).forEach((b) => (b.onclick = () => { S.faturaMes[id] = somaMes(f.mes, Number(b.dataset.fm)); render(); }));
     $('#edit-cc').onclick = () => abrirCartao(f.cartao);
     const pg = $('#pagar'); if (pg) pg.onclick = () => abrirPagarFatura(f);
-    ligarTransacoes($('#itens'), f.itens.map((t) => ({ ...t, cartao_nome: f.cartao.nome })));
   }
 
   async function viewRelatorios(el) {
@@ -302,8 +372,8 @@
     el.innerHTML = `
       <div class="card"><h2>Receitas x despesas (6 meses)</h2><div class="chart-box"><canvas id="ch-bar"></canvas></div></div>
       <div class="grid-2">
-        <div class="card"><h2>Para onde foi o dinheiro</h2>${d.despesas_por_categoria.length ? `<div class="chart-box" style="height:200px"><canvas id="ch-d"></canvas></div>${legendaCategorias(d.despesas_por_categoria)}` : vazio('📊', 'Sem despesas no período.')}</div>
-        <div class="card"><h2>De onde veio o dinheiro</h2>${d.receitas_por_categoria.length ? `<div class="chart-box" style="height:200px"><canvas id="ch-r"></canvas></div>${legendaCategorias(d.receitas_por_categoria)}` : vazio('📊', 'Sem receitas no período.')}</div>
+        <div class="card" id="rel-d"><h2>Para onde foi o dinheiro</h2>${d.despesas_por_categoria.length ? `<div class="chart-box" style="height:200px"><canvas id="ch-d"></canvas></div>${legendaCategorias(d.despesas_por_categoria)}` : vazio('📊', 'Sem despesas no período.')}</div>
+        <div class="card" id="rel-r"><h2>De onde veio o dinheiro</h2>${d.receitas_por_categoria.length ? `<div class="chart-box" style="height:200px"><canvas id="ch-r"></canvas></div>${legendaCategorias(d.receitas_por_categoria)}` : vazio('📊', 'Sem receitas no período.')}</div>
       </div>`;
     if (window.Chart) {
       const escuro = matchMedia('(prefers-color-scheme: dark)').matches;
@@ -324,8 +394,11 @@
         },
       }));
     }
-    graficoRosca($('#ch-d'), d.despesas_por_categoria);
-    graficoRosca($('#ch-r'), d.receitas_por_categoria);
+    graficoRosca($('#ch-d'), d.despesas_por_categoria, 'despesa');
+    graficoRosca($('#ch-r'), d.receitas_por_categoria, 'receita');
+    ligarCategorias($('#rel-d'), 'despesa');
+    ligarCategorias($('#rel-r'), 'receita');
+    $('#ch-bar').onclick = () => (location.hash = '#/lancamentos');
   }
 
   const tipoConta = (t) => ({ corrente: 'Conta corrente', poupanca: 'Poupança', carteira: 'Dinheiro / carteira', investimento: 'Investimento' }[t] || t);
@@ -338,9 +411,9 @@
       <div class="card"><div class="lista" id="lc">${contas.length ? contas.map((c) => `<div class="item clic" data-c="${c.id}" style="${c.arquivada ? 'opacity:.55' : ''}">
         <div class="avatar" style="background:${c.cor}22;color:${c.cor}">${IC.contas}</div>
         <div class="item-main"><div class="item-tit">${esc(c.nome)}${c.arquivada ? '<span class="tag">arquivada</span>' : ''}</div><div class="item-sub">${tipoConta(c.tipo)}</div></div>
-        <div class="item-val ${c.saldo < 0 ? 'neg' : ''}">${brl(c.saldo)}</div></div>`).join('') : vazio('🏦', 'Nenhuma conta ainda.')}</div></div>
+        <div class="item-val ${c.saldo < 0 ? 'neg' : ''}">${brl(c.saldo)}</div><span class="seta">›</span></div>`).join('') : vazio('🏦', 'Nenhuma conta ainda.')}</div></div>
       <button class="btn btn-primary" id="nova" style="justify-self:start">＋ Adicionar conta</button>`;
-    $$('[data-c]', el).forEach((n) => (n.onclick = () => abrirConta(contas.find((c) => c.id === Number(n.dataset.c)))));
+    $$('[data-c]', el).forEach((n) => (n.onclick = () => (location.hash = `#/conta/${n.dataset.c}`)));
     $('#nova').onclick = () => abrirConta();
   }
 
@@ -354,7 +427,7 @@
     const abrir = (catId) => {
       const o = orcs.find((x) => x.categoria_id === catId);
       abrirSheet(`<h3>Limite mensal</h3><form id="f">
-        <label>Categoria<select name="categoria_id">${cats.filter((c) => c.tipo === 'despesa').map((c) => `<option value="${c.id}" ${c.id === catId ? 'selected' : ''}>${esc(c.icone)} ${esc(c.nome)}</option>`).join('')}</select></label>
+        <label>Categoria<select name="categoria_id">${opcoesCategoria(cats, 'despesa', catId)}</select></label>
         <label>Quanto posso gastar por mês<input name="valor" inputmode="decimal" placeholder="0,00" value="${o ? valorInput(o.valor) : ''}" required></label>
         <p class="form-erro" id="fe"></p>
         <div class="sheet-acoes">${o ? '<button type="button" class="btn btn-danger" id="rm">Remover</button>' : ''}<button class="btn btn-primary">Salvar</button></div></form>`);
@@ -367,11 +440,13 @@
 
   async function viewCategorias(el) {
     const cats = await api('/categorias');
-    const bloco = (tipo, tit) => `<div class="card"><h2>${tit}</h2><div class="lista">${cats.filter((c) => c.tipo === tipo).map((c) => `<div class="item clic" data-k="${c.id}"><div class="avatar" style="background:${c.cor}22">${esc(c.icone)}</div><div class="item-main"><div class="item-tit">${esc(c.nome)}</div></div><span style="width:12px;height:12px;border-radius:50%;background:${c.cor}"></span></div>`).join('')}</div></div>`;
+    const linha = (c, filho) => `<div class="item clic ${filho ? 'filho' : ''}" data-k="${c.id}"><div class="avatar" style="background:${c.cor}22">${esc(c.icone)}</div><div class="item-main"><div class="item-tit">${esc(c.nome)}</div>${!filho && c.filhos.length ? `<div class="item-sub">${c.filhos.length} subcategoria${c.filhos.length > 1 ? 's' : ''}</div>` : ''}</div><span class="seta">›</span></div>`;
+    const bloco = (tipo, tit) => `<div class="card"><h2>${tit}</h2><div class="lista">${arvore(cats, tipo).map((p) => linha(p) + p.filhos.map((f) => linha(f, true)).join('')).join('')}</div></div>`;
     el.innerHTML = `<div class="grid-2">${bloco('despesa', 'Despesas')}${bloco('receita', 'Receitas')}</div>
+      <p class="item-sub" style="white-space:normal">Toque numa categoria para ver quanto gastou nela e editar. Subcategorias (ex.: Moto › Combustível) somam na categoria principal.</p>
       <button class="btn btn-primary" id="nova" style="justify-self:start">＋ Nova categoria</button>`;
-    $$('[data-k]', el).forEach((n) => (n.onclick = () => abrirCategoria(cats.find((c) => c.id === Number(n.dataset.k)))));
-    $('#nova').onclick = () => abrirCategoria();
+    $$('[data-k]', el).forEach((n) => (n.onclick = () => (location.hash = rotaCategoria(Number(n.dataset.k)))));
+    $('#nova').onclick = () => abrirCategoria(null, cats);
   }
 
   async function viewAjustes(el) {
@@ -386,6 +461,104 @@
       <button class="btn btn-danger" id="sair2" style="justify-self:start">Sair da conta</button>`;
     $('#fs').onsubmit = enviar('#fs', async (v) => { await api('/senha', { method: 'POST', body: v }); }, 'Senha alterada', false);
     $('#sair2').onclick = sair;
+  }
+
+  // Receitas ou despesas do mês: por categoria, por conta/cartão e todos os lançamentos.
+  async function viewTipo(el, tipo) {
+    tipo = tipo === 'receita' ? 'receita' : 'despesa';
+    const d = await api(`/resumo?tipo=${tipo}&mes=${S.mes}`);
+    const rec = tipo === 'receita';
+    $('#titulo').lastChild.textContent = rec ? 'Receitas' : 'Despesas';
+    el.innerHTML = `
+      <section class="hero ${rec ? 'hero-in' : 'hero-out'}">
+        <div><div class="hero-label">${rec ? 'Entrou' : 'Saiu'} em ${nomeMes(S.mes)}</div><div class="hero-valor">${brl(d.total, true)}</div>${variacao(d.total, d.total_mes_anterior)}</div>
+      </section>
+      <div class="chips"><a class="chip ${rec ? '' : 'ativo'}" href="#/tipo/despesa">Despesas</a><a class="chip ${rec ? 'ativo' : ''}" href="#/tipo/receita">Receitas</a></div>
+      <div class="grid-2">
+        <div class="card" id="t-cat"><h2>Por categoria <span class="item-sub">toque para abrir</span></h2>
+          ${d.categorias.length ? `<div class="chart-box" style="height:190px"><canvas id="ch-t"></canvas></div>${legendaCategorias(d.categorias, d.total)}` : vazio(rec ? '💸' : '🥳', rec ? 'Nenhuma receita neste mês.' : 'Nenhuma despesa neste mês.')}</div>
+        <div style="display:grid;gap:18px;align-content:start">
+          ${d.origens.length ? `<div class="card"><h2>${rec ? 'Onde entrou' : 'Como foi pago'}</h2><div class="lista">${d.origens.map((o) => `<a class="item clic" href="${o.cartao ? `#/cartao/${o.chave.slice(1)}` : `#/conta/${o.chave.slice(1)}`}">
+            <div class="avatar" style="background:var(--bg)">${o.cartao ? '💳' : '🏦'}</div><div class="item-main"><div class="item-tit">${esc(o.nome)}</div><div class="barra"><i style="width:${(o.total / (d.total || 1)) * 100}%"></i></div></div>
+            <div class="item-val">${brl(o.total, true)}</div><span class="seta">›</span></a>`).join('')}</div></div>` : ''}
+          <div class="card"><h2>Lançamentos <span class="item-sub">${d.transacoes.length}</span></h2><div id="t-lst">${d.transacoes.length ? listaPorDia(d.transacoes) : vazio('📝', 'Nada por aqui.')}</div></div>
+        </div>
+      </div>`;
+    graficoRosca($('#ch-t'), d.categorias, tipo);
+    ligarCategorias($('#t-cat'), tipo);
+    ligarTransacoes($('#t-lst'), d.transacoes);
+  }
+
+  // Detalhe de uma categoria: total do mês, subcategorias, histórico e lançamentos.
+  S.subSel = null;
+  async function viewCategoria(el, arg) {
+    const [idTxt, tipoSem] = String(arg || '').split('-');
+    const id = Number(idTxt) || 0;
+    if (S.catAberta !== arg) { S.catAberta = arg; S.subSel = null; }
+    const d = await api(`/categorias/${id}/resumo?mes=${S.mes}${id ? '' : `&tipo=${tipoSem || 'despesa'}`}`);
+    const c = d.categoria;
+    const rec = c.tipo === 'receita';
+    $('#titulo').lastChild.textContent = c.nome;
+    const lista = S.subSel === null ? d.transacoes : d.transacoes.filter((t) => t.categoria_id === S.subSel);
+    const subSel = d.subcategorias.find((x) => x.id === S.subSel);
+    el.innerHTML = `
+      ${d.pai ? `<a class="migalha" href="${rotaCategoria(d.pai.id)}">${esc(d.pai.icone)} ${esc(d.pai.nome)} ›</a>` : ''}
+      <section class="hero" style="background:linear-gradient(135deg, ${c.cor} 0%, ${c.cor}AA 100%)">
+        <div style="display:flex;gap:14px;align-items:center"><span class="hero-ic">${esc(c.icone)}</span>
+          <div><div class="hero-label" style="color:#ffffffd0">${rec ? 'Recebido' : 'Gasto'} em ${nomeMes(S.mes)}</div><div class="hero-valor">${brl(d.total, true)}</div></div></div>
+        ${variacao(d.total, d.historico[4].total)}
+      </section>
+      <div class="acoes-linha">
+        <button class="btn btn-primary" id="c-novo">＋ Lançar</button>
+        ${id ? '<button class="btn btn-ghost" id="c-edit">✎ Editar</button>' : ''}
+        ${id && !c.parent_id ? '<button class="btn btn-ghost" id="c-sub">＋ Subcategoria</button>' : ''}
+      </div>
+      <div class="grid-2">
+        <div style="display:grid;gap:18px;align-content:start">
+          ${d.subcategorias.length ? `<div class="card" id="c-subs"><h2>Separado por tipo <span class="item-sub">toque para filtrar</span></h2>
+            <div class="legenda">${d.subcategorias.map((x) => `<div class="item clic ${x.id === S.subSel ? 'sel' : ''} ${x.total ? '' : 'zerado'}" data-sub="${x.id}">
+              <div class="avatar" style="background:${x.cor}22">${esc(x.icone)}</div>
+              <div class="item-main"><div class="item-tit">${esc(x.nome)}</div><div class="barra"><i style="width:${d.total ? (x.total / d.total) * 100 : 0}%;background:${x.cor}"></i></div></div>
+              <div class="item-val">${brl(x.total, true)}<small>${d.total ? Math.round((x.total / d.total) * 100) : 0}%</small></div></div>`).join('')}</div></div>` : ''}
+          <div class="card"><h2>Últimos 6 meses</h2><div class="chart-box" style="height:170px"><canvas id="ch-hist"></canvas></div></div>
+        </div>
+        <div class="card"><h2>${subSel ? `${esc(subSel.nome)} <button class="chip ativo" id="c-limpa">✕ ver tudo</button>` : 'Lançamentos'} <span class="item-sub">${lista.length}</span></h2>
+          <div id="c-lst">${lista.length ? listaPorDia(lista, { semCategoria: !d.subcategorias.length }) : vazio('🔍', 'Nenhum lançamento neste mês.')}</div></div>
+      </div>`;
+    graficoBarras($('#ch-hist'), d.historico.map((h) => mesCurto(h.mes)), d.historico.map((h) => h.total / 100), c.cor);
+    ligarTransacoes($('#c-lst'), lista);
+    $$('[data-sub]', el).forEach((n) => (n.onclick = () => {
+      const sid = Number(n.dataset.sub);
+      const sub = d.subcategorias.find((x) => x.id === sid);
+      if (!sub.geral && S.subSel === sid) { location.hash = rotaCategoria(sid); return; } // 2º toque abre a subcategoria
+      S.subSel = S.subSel === sid ? null : sid; render();
+    }));
+    const lp = $('#c-limpa'); if (lp) lp.onclick = () => { S.subSel = null; render(); };
+    $('#c-novo').onclick = () => abrirLancamento(null, c.tipo, S.subSel || id || undefined);
+    const ed = $('#c-edit'); if (ed) ed.onclick = () => abrirCategoria(c);
+    const sb = $('#c-sub'); if (sb) sb.onclick = () => abrirCategoria(null, null, c.id);
+  }
+
+  // Detalhe de uma conta: saldo, entradas e saídas do mês e lançamentos.
+  async function viewConta(el, id) {
+    const [contas, lista] = await Promise.all([api('/contas'), api(`/transacoes?mes=${S.mes}&conta_id=${id}`)]);
+    const c = contas.find((x) => x.id === Number(id));
+    if (!c) throw new Error('Conta não encontrada.');
+    $('#titulo').lastChild.textContent = c.nome;
+    const entra = lista.filter((t) => (t.tipo === 'receita' && t.conta_id === c.id) || (t.tipo === 'transferencia' && t.conta_destino_id === c.id)).reduce((a, t) => a + t.valor, 0);
+    const sai = lista.filter((t) => t.conta_id === c.id && t.tipo !== 'receita').reduce((a, t) => a + t.valor, 0);
+    el.innerHTML = `
+      <section class="hero" style="background:linear-gradient(135deg, ${c.cor} 0%, ${c.cor}AA 100%)">
+        <div><div class="hero-label" style="color:#ffffffd0">Saldo atual · ${tipoConta(c.tipo)}</div><div class="hero-valor">${brl(c.saldo)}</div></div>
+        <div class="hero-row">
+          <div class="hero-pill"><span class="dot in">↑</span><div><small>Entrou no mês</small><b>${brl(entra, true)}</b></div></div>
+          <div class="hero-pill"><span class="dot out">↓</span><div><small>Saiu no mês</small><b>${brl(sai, true)}</b></div></div>
+        </div>
+      </section>
+      <div class="acoes-linha"><button class="btn btn-ghost" id="k-edit">Editar conta</button></div>
+      <div class="card"><h2>Movimentações de ${nomeMes(S.mes)} <span class="item-sub">${lista.length}</span></h2><div id="k-lst">${lista.length ? listaPorDia(lista) : vazio('🔍', 'Nada neste mês.')}</div></div>`;
+    ligarTransacoes($('#k-lst'), lista);
+    $('#k-edit').onclick = () => abrirConta(c);
   }
 
   async function viewMais(el) {
@@ -424,7 +597,7 @@
   const PALETA = ['#12B886', '#0EA5E9', '#5B4BDB', '#8B5CF6', '#EC4899', '#F0546A', '#F97316', '#EAB308', '#22C55E', '#0B1B2B', '#64748B', '#820AD1'];
   const seletorCores = (atual) => `<div class="cores">${PALETA.map((c) => `<label><input type="radio" name="cor" value="${c}" ${c.toLowerCase() === (atual || PALETA[0]).toLowerCase() ? 'checked' : ''}><span style="background:${c}"></span></label>`).join('')}</div>`;
 
-  async function abrirLancamento(t, tipoInicial = 'despesa') {
+  async function abrirLancamento(t, tipoInicial = 'despesa', catInicial) {
     const [contas, cats, cartoes] = await Promise.all([api('/contas'), api('/categorias'), api('/cartoes')]);
     const ativas = contas.filter((c) => !c.arquivada);
     if (!ativas.length) { toast('Cadastre uma conta antes de lançar.', true); location.hash = '#/contas'; return abrirConta(); }
@@ -471,8 +644,8 @@
     const ajustar = () => {
       $$('.seg button', f).forEach((b) => b.classList.toggle('ativo', b.dataset.tipo === tipo));
       $('#vb').className = `valor-box ${tipo}`;
-      const sel = f.categoria_id, atualCat = sel.value || t?.categoria_id;
-      sel.innerHTML = cats.filter((c) => c.tipo === tipo).map((c) => `<option value="${c.id}">${esc(c.icone)} ${esc(c.nome)}</option>`).join('');
+      const sel = f.categoria_id, atualCat = sel.value || t?.categoria_id || catInicial;
+      sel.innerHTML = opcoesCategoria(cats, tipo);
       if (atualCat && [...sel.options].some((o) => o.value == atualCat)) sel.value = atualCat;
       const origSel = f.origem, atualOrig = origSel.value || origemAtual;
       origSel.innerHTML = opcoesOrigem(tipo === 'despesa');
@@ -536,7 +709,7 @@
     $('#fc').onsubmit = enviar('#fc', async (v) => { await api(c ? `/contas/${c.id}` : '/contas', { method: c ? 'PUT' : 'POST', body: v }); });
     if (c) $('#del').onclick = async () => {
       if (!confirm(`Excluir "${c.nome}"? Todos os lançamentos dessa conta também serão apagados. Se só quiser esconder, use "Arquivar".`)) return;
-      await api(`/contas/${c.id}`, { method: 'DELETE' }); fecharSheet(); toast('Conta excluída'); render();
+      await api(`/contas/${c.id}`, { method: 'DELETE' }); fecharSheet(); toast('Conta excluída'); location.hash = '#/contas';
     };
   }
 
@@ -568,19 +741,30 @@
     $('#fp').onsubmit = enviar('#fp', async (v) => { await api(`/cartoes/${f.cartao.id}/fatura/pagar`, { method: 'POST', body: { ...v, mes: f.mes } }); }, 'Fatura paga!');
   }
 
-  function abrirCategoria(c) {
+  async function abrirCategoria(c, cats, paiInicial) {
+    cats = cats || await api('/categorias');
+    const temFilhos = c && cats.some((x) => x.parent_id === c.id);
+    const tipoAtual = c?.tipo || cats.find((x) => x.id === paiInicial)?.tipo || 'despesa';
+    const opPais = (tipo) => `<option value="">— Nenhuma (é uma categoria principal)</option>` + cats.filter((x) => x.tipo === tipo && !x.parent_id && x.id !== c?.id)
+      .map((x) => `<option value="${x.id}" ${x.id === (c ? c.parent_id : paiInicial) ? 'selected' : ''}>${esc(x.icone)} ${esc(x.nome)}</option>`).join('');
     const emojis = ['🍔', '🛒', '⛽', '🔧', '🚌', '🏠', '💡', '📱', '🎓', '💊', '🏋️', '🎉', '👕', '🔁', '🛡️', '📦', '🐶', '🎁', '✈️', '☕', '🍺', '🎮', '💇', '🧾', '🛵', '💼', '💻', '🏷️', '💰', '📈', '➕', '❤️'];
     abrirSheet(`<h3>${c ? 'Editar categoria' : 'Nova categoria'}</h3><form id="fg">
       <label>Nome<input name="nome" required maxlength="40" value="${esc(c?.nome || '')}" autofocus></label>
-      <label>Tipo<select name="tipo"><option value="despesa">Despesa</option><option value="receita" ${c?.tipo === 'receita' ? 'selected' : ''}>Receita</option></select></label>
+      <label>Tipo<select name="tipo" ${c?.parent_id || paiInicial ? 'disabled' : ''}><option value="despesa">Despesa</option><option value="receita" ${tipoAtual === 'receita' ? 'selected' : ''}>Receita</option></select></label>
+      ${temFilhos ? '<p class="item-sub" style="white-space:normal;margin:0">Esta categoria tem subcategorias, então ela continua sendo principal.</p>' : `<label>Dentro de (subcategoria de)<select name="parent_id">${opPais(tipoAtual)}</select></label>`}
       <label>Ícone<div class="cores">${emojis.map((e) => `<label><input type="radio" name="icone" value="${e}" ${(c?.icone || '📦') === e ? 'checked' : ''}><span style="display:grid;place-items:center;background:var(--bg);font-size:16px">${e}</span></label>`).join('')}</div></label>
       <label>Cor${seletorCores(c?.cor)}</label>
       <p class="form-erro" id="fe"></p>
       <div class="sheet-acoes">${c ? '<button type="button" class="btn btn-danger" id="del">Excluir</button>' : ''}<button class="btn btn-primary">Salvar</button></div></form>`);
-    $('#fg').onsubmit = enviar('#fg', async (v) => { await api(c ? `/categorias/${c.id}` : '/categorias', { method: c ? 'PUT' : 'POST', body: v }); });
+    const fg = $('#fg');
+    if (fg.tipo && fg.parent_id) fg.tipo.onchange = () => (fg.parent_id.innerHTML = opPais(fg.tipo.value));
+    fg.onsubmit = enviar('#fg', async (v) => {
+      if (!v.tipo) v.tipo = tipoAtual;
+      await api(c ? `/categorias/${c.id}` : '/categorias', { method: c ? 'PUT' : 'POST', body: v });
+    });
     if (c) $('#del').onclick = async () => {
-      if (!confirm(`Excluir "${c.nome}"? Os lançamentos dela ficam "Sem categoria".`)) return;
-      await api(`/categorias/${c.id}`, { method: 'DELETE' }); fecharSheet(); toast('Categoria excluída'); render();
+      if (!confirm(`Excluir "${c.nome}"? Os lançamentos dela ficam "Sem categoria"${temFilhos ? ' e as subcategorias viram categorias principais' : ''}.`)) return;
+      await api(`/categorias/${c.id}`, { method: 'DELETE' }); fecharSheet(); toast('Categoria excluída'); location.hash = '#/categorias';
     };
   }
 

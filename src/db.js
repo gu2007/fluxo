@@ -102,6 +102,11 @@ CREATE TABLE IF NOT EXISTS faturas_pagas (
 );
 `);
 
+// Migração: subcategorias (categoria "mãe").
+if (!db.prepare('PRAGMA table_info(categorias)').all().some((c) => c.name === 'parent_id')) {
+  db.exec('ALTER TABLE categorias ADD COLUMN parent_id INTEGER REFERENCES categorias(id) ON DELETE SET NULL');
+}
+
 // Quando o pagamento de uma fatura é apagado, a fatura volta a ficar em aberto.
 db.exec(`
 CREATE TRIGGER IF NOT EXISTS tr_fatura_reabre AFTER DELETE ON transacoes

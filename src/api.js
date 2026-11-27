@@ -114,29 +114,85 @@ r.delete('/contas/:id', (req, res) => {
 // ---------- categorias ----------
 r.get('/categorias', (req, res) => res.json(db.prepare('SELECT * FROM categorias ORDER BY tipo DESC, nome').all()));
 
-function dadosCategoria(b) {
+// Uma categoria pode ter uma "categoria mãe" (parent_id): ex. Moto › Combustível.
+// Só existe um nível: subcategorias não têm filhas.
+function dadosCategoria(b, id = null) {
   const nome = txt(b.nome, 40);
   if (!nome) return { erro: 'Dê um nome para a categoria.' };
   if (!['receita', 'despesa'].includes(b.tipo)) return { erro: 'Tipo inválido.' };
-  return { nome, tipo: b.tipo, cor: cor(b.cor, '#64748B'), icone: txt(b.icone, 8) || '🏷️' };
+  const parent = int(b.parent_id) || null;
+  if (parent) {
+    const p = db.prepare('SELECT * FROM categorias WHERE id = ?').get(parent);
+    if (!p) return { erro: 'Categoria principal não encontrada.' };
+    if (p.id === id) return { erro: 'Uma categoria não pode ficar dentro dela mesma.' };
+    if (p.parent_id) return { erro: 'Escolha uma categoria principal (não uma subcategoria).' };
+    if (p.tipo !== b.tipo) return { erro: 'A subcategoria precisa ser do mesmo tipo da principal.' };
+    if (id && db.prepare('SELECT 1 FROM categorias WHERE parent_id = ?').get(id)) return { erro: 'Esta categoria tem subcategorias, então ela não pode virar subcategoria.' };
+  }
+  return { nome, tipo: b.tipo, cor: cor(b.cor, '#64748B'), icone: txt(b.icone, 8) || '🏷️', parent_id: parent };
 }
 
 r.post('/categorias', (req, res) => {
   const d = dadosCategoria(req.body);
   if (d.erro) return erro(res, d.erro);
-  res.json({ id: db.prepare('INSERT INTO categorias (nome,tipo,cor,icone) VALUES (@nome,@tipo,@cor,@icone)').run(d).lastInsertRowid });
+  res.json({ id: db.prepare('INSERT INTO categorias (nome,tipo,cor,icone,parent_id) VALUES (@nome,@tipo,@cor,@icone,@parent_id)').run(d).lastInsertRowid });
 });
 
 r.put('/categorias/:id', (req, res) => {
-  const d = dadosCategoria(req.body);
+  const id = int(req.params.id);
+  const d = dadosCategoria(req.body, id);
   if (d.erro) return erro(res, d.erro);
-  db.prepare('UPDATE categorias SET nome=@nome,tipo=@tipo,cor=@cor,icone=@icone WHERE id=@id').run({ ...d, id: int(req.params.id) });
+  db.transaction(() => {
+    db.prepare('UPDATE categorias SET nome=@nome,tipo=@tipo,cor=@cor,icone=@icone,parent_id=@parent_id WHERE id=@id').run({ ...d, id });
+    db.prepare('UPDATE categorias SET tipo=? WHERE parent_id=?').run(d.tipo, id); // filhas acompanham o tipo
+  })();
   res.json({ ok: true });
 });
 
 r.delete('/categorias/:id', (req, res) => {
-  db.prepare('DELETE FROM categorias WHERE id = ?').run(int(req.params.id));
+  const id = int(req.params.id);
+  db.transaction(() => {
+    db.prepare('UPDATE categorias SET parent_id = NULL WHERE parent_id = ?').run(id);
+    db.prepare('DELETE FROM categorias WHERE id = ?').run(id);
+  })();
   res.json({ ok: true });
+});
+
+// Ids da categoria + suas subcategorias (id 0 = "Sem categoria").
+function idsDaFamilia(id) {
+  return [id, ...db.prepare('SELECT id FROM categorias WHERE parent_id = ?').all(id).map((c) => c.id)];
+}
+
+// Detalhe de uma categoria num período: total, total por subcategoria, lançamentos e histórico de 6 meses.
+r.get('/categorias/:id/resumo', (req, res) => {
+  const id = int(req.params.id) || 0;
+  const mes = U.ehMes(req.query.mes) ? req.query.mes : U.hojeISO().slice(0, 7);
+  let cat, ids, filtro, args;
+  if (id === 0) {
+    const tipo = req.query.tipo === 'receita' ? 'receita' : 'despesa';
+    cat = { id: 0, nome: 'Sem categoria', tipo, cor: '#94A3B8', icone: '📦', parent_id: null };
+    filtro = 't.categoria_id IS NULL AND t.tipo = ?'; args = [tipo]; ids = [];
+  } else {
+    cat = db.prepare('SELECT * FROM categorias WHERE id = ?').get(id);
+    if (!cat) return erro(res, 'Categoria não encontrada.', 404);
+    ids = cat.parent_id ? [cat.id] : idsDaFamilia(cat.id);
+    filtro = `t.categoria_id IN (${ids.map(() => '?').join(',')}) AND t.tipo = ?`; args = [...ids, cat.tipo];
+  }
+  const transacoes = db.prepare(`${SELECT_TX} WHERE ${filtro} AND t.data LIKE ? ORDER BY t.data DESC, t.id DESC`).all(...args, `${mes}-%`);
+  // por subcategoria
+  const subs = cat.parent_id || id === 0 ? [] : db.prepare('SELECT * FROM categorias WHERE parent_id = ? ORDER BY nome').all(cat.id);
+  const porSub = subs.map((s) => ({ ...s, total: transacoes.filter((t) => t.categoria_id === s.id).reduce((a, t) => a + t.valor, 0) }));
+  const direto = transacoes.filter((t) => t.categoria_id === cat.id).reduce((a, t) => a + t.valor, 0);
+  if (subs.length && direto) porSub.push({ id: cat.id, nome: `${cat.nome} (geral)`, cor: cat.cor, icone: cat.icone, total: direto, geral: true });
+  porSub.sort((a, b) => b.total - a.total);
+  // histórico
+  const historico = [];
+  for (let i = 5; i >= 0; i--) {
+    const m = U.mesSeguinte(mes, -i);
+    historico.push({ mes: m, total: db.prepare(`SELECT COALESCE(SUM(t.valor),0) v FROM transacoes t WHERE ${filtro} AND t.data LIKE ?`).get(...args, `${m}-%`).v });
+  }
+  const pai = cat.parent_id ? db.prepare('SELECT id, nome, icone FROM categorias WHERE id = ?').get(cat.parent_id) : null;
+  res.json({ categoria: cat, pai, mes, total: transacoes.reduce((a, t) => a + t.valor, 0), subcategorias: porSub, transacoes, historico });
 });
 
 // ---------- cartões ----------
@@ -207,10 +263,19 @@ r.get('/cartoes/:id/fatura', (req, res) => {
   const c = db.prepare('SELECT * FROM cartoes WHERE id = ?').get(int(req.params.id));
   if (!c) return erro(res, 'Cartão não encontrado.', 404);
   const mes = U.ehMes(req.query.mes) ? req.query.mes : U.faturaDaCompra(U.hojeISO(), c.dia_fechamento);
-  const itens = db.prepare(`
-    SELECT t.*, cat.nome cat_nome, cat.cor cat_cor, cat.icone cat_icone
-    FROM transacoes t LEFT JOIN categorias cat ON cat.id = t.categoria_id
-    WHERE t.cartao_id = ? AND t.fatura = ? ORDER BY t.data DESC, t.id DESC`).all(c.id, mes);
+  const itens = db.prepare(`${SELECT_TX} WHERE t.cartao_id = ? AND t.fatura = ? ORDER BY t.data DESC, t.id DESC`).all(c.id, mes);
+  // total por categoria principal
+  const grupos = {};
+  for (const t of itens) {
+    const k = t.cat_pai_id || t.categoria_id || 0;
+    const g = grupos[k] || (grupos[k] = {
+      id: k, total: 0,
+      nome: t.cat_pai_nome || t.cat_nome || 'Sem categoria',
+      cor: t.cat_pai_cor || t.cat_cor || '#94A3B8',
+      icone: t.cat_pai_icone || t.cat_icone || '📦',
+    });
+    g.total += t.valor;
+  }
   const pag = db.prepare('SELECT f.*, t.data data_pagamento, t.conta_id FROM faturas_pagas f LEFT JOIN transacoes t ON t.id=f.transacao_id WHERE f.cartao_id=? AND f.mes=?').get(c.id, mes);
   res.json({
     cartao: infoCartao(c),
@@ -220,6 +285,7 @@ r.get('/cartoes/:id/fatura', (req, res) => {
     total: itens.reduce((s, t) => s + t.valor, 0),
     paga: !!pag,
     pagamento: pag || null,
+    por_categoria: Object.values(grupos).sort((a, b) => b.total - a.total),
     itens,
   });
 });
@@ -247,9 +313,11 @@ r.post('/cartoes/:id/fatura/pagar', (req, res) => {
 // ---------- transações ----------
 const SELECT_TX = `
   SELECT t.*, cat.nome cat_nome, cat.cor cat_cor, cat.icone cat_icone,
+         cp.id cat_pai_id, cp.nome cat_pai_nome, cp.cor cat_pai_cor, cp.icone cat_pai_icone,
          co.nome conta_nome, cd.nome conta_destino_nome, ca.nome cartao_nome, ca.cor cartao_cor
   FROM transacoes t
   LEFT JOIN categorias cat ON cat.id = t.categoria_id
+  LEFT JOIN categorias cp ON cp.id = cat.parent_id
   LEFT JOIN contas co ON co.id = t.conta_id
   LEFT JOIN contas cd ON cd.id = t.conta_destino_id
   LEFT JOIN cartoes ca ON ca.id = t.cartao_id`;
@@ -261,7 +329,10 @@ r.get('/transacoes', (req, res) => {
   if (['receita', 'despesa', 'transferencia', 'pagamento_fatura'].includes(req.query.tipo)) { where.push('t.tipo = ?'); args.push(req.query.tipo); }
   if (int(req.query.conta_id)) { where.push('(t.conta_id = ? OR t.conta_destino_id = ?)'); args.push(int(req.query.conta_id), int(req.query.conta_id)); }
   if (int(req.query.cartao_id)) { where.push('t.cartao_id = ?'); args.push(int(req.query.cartao_id)); }
-  if (int(req.query.categoria_id)) { where.push('t.categoria_id = ?'); args.push(int(req.query.categoria_id)); }
+  if (int(req.query.categoria_id)) {
+    const ids = idsDaFamilia(int(req.query.categoria_id));
+    where.push(`t.categoria_id IN (${ids.map(() => '?').join(',')})`); args.push(...ids);
+  }
   if (req.query.busca) { where.push('t.descricao LIKE ?'); args.push(`%${txt(req.query.busca, 60)}%`); }
   if (req.query.pendentes === '1') where.push('t.pago = 0');
   res.json(db.prepare(`${SELECT_TX} WHERE ${where.join(' AND ')} ORDER BY t.data DESC, t.id DESC`).all(...args));
@@ -351,6 +422,16 @@ r.put('/transacoes/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// Troca só a categoria de um lançamento (usado para reorganizar sem mexer em valor, data, parcelas…).
+r.patch('/transacoes/:id/categoria', (req, res) => {
+  const t = db.prepare('SELECT * FROM transacoes WHERE id = ?').get(int(req.params.id));
+  if (!t) return erro(res, 'Lançamento não encontrado.', 404);
+  const cat = int(req.body.categoria_id);
+  if (cat && !db.prepare('SELECT 1 FROM categorias WHERE id = ? AND tipo = ?').get(cat, t.tipo)) return erro(res, 'Categoria inválida para este lançamento.');
+  db.prepare('UPDATE transacoes SET categoria_id = ? WHERE id = ?').run(cat || null, t.id);
+  res.json({ ok: true });
+});
+
 r.patch('/transacoes/:id/pago', (req, res) => {
   db.prepare('UPDATE transacoes SET pago = ? WHERE id = ? AND cartao_id IS NULL').run(req.body.pago ? 1 : 0, int(req.params.id));
   res.json({ ok: true });
@@ -369,7 +450,7 @@ r.delete('/transacoes/:id', (req, res) => {
 function orcamentosDoMes(mes) {
   return db.prepare(`
     SELECT o.id, o.valor, c.id categoria_id, c.nome, c.cor, c.icone,
-      COALESCE((SELECT SUM(valor) FROM transacoes t WHERE t.categoria_id=c.id AND t.tipo='despesa' AND t.data LIKE ?),0) gasto
+      COALESCE((SELECT SUM(valor) FROM transacoes t WHERE (t.categoria_id=c.id OR t.categoria_id IN (SELECT id FROM categorias WHERE parent_id=c.id)) AND t.tipo='despesa' AND t.data LIKE ?),0) gasto
     FROM orcamentos o JOIN categorias c ON c.id = o.categoria_id ORDER BY c.nome`).all(`${mes}-%`);
 }
 
@@ -399,13 +480,42 @@ function totaisDoMes(mes) {
     FROM transacoes WHERE data LIKE ?`).get(`${mes}-%`);
 }
 
+// Total por categoria PRINCIPAL (subcategorias somam na mãe).
 function porCategoria(tipo, de, ate) {
   return db.prepare(`
-    SELECT COALESCE(c.id,0) id, COALESCE(c.nome,'Sem categoria') nome, COALESCE(c.cor,'#94A3B8') cor, COALESCE(c.icone,'📦') icone, SUM(t.valor) total
-    FROM transacoes t LEFT JOIN categorias c ON c.id = t.categoria_id
+    SELECT COALESCE(p.id, c.id, 0) id,
+           COALESCE(p.nome, c.nome, 'Sem categoria') nome,
+           COALESCE(p.cor, c.cor, '#94A3B8') cor,
+           COALESCE(p.icone, c.icone, '📦') icone,
+           SUM(t.valor) total, COUNT(*) qtd
+    FROM transacoes t
+    LEFT JOIN categorias c ON c.id = t.categoria_id
+    LEFT JOIN categorias p ON p.id = c.parent_id
     WHERE t.tipo = ? AND t.data >= ? AND t.data <= ?
-    GROUP BY c.id ORDER BY total DESC`).all(tipo, de, ate);
+    GROUP BY 1 ORDER BY total DESC`).all(tipo, de, ate);
 }
+
+// Resumo de receitas ou despesas do mês: por categoria, por conta/cartão e todos os lançamentos.
+r.get('/resumo', (req, res) => {
+  const tipo = req.query.tipo === 'receita' ? 'receita' : 'despesa';
+  const mes = U.ehMes(req.query.mes) ? req.query.mes : U.hojeISO().slice(0, 7);
+  const transacoes = db.prepare(`${SELECT_TX} WHERE t.tipo = ? AND t.data LIKE ? ORDER BY t.data DESC, t.id DESC`).all(tipo, `${mes}-%`);
+  const origens = {};
+  for (const t of transacoes) {
+    const k = t.cartao_id ? `k${t.cartao_id}` : `c${t.conta_id}`;
+    const o = origens[k] || (origens[k] = { chave: k, nome: t.cartao_id ? t.cartao_nome : t.conta_nome, cartao: !!t.cartao_id, total: 0 });
+    o.total += t.valor;
+  }
+  const anterior = totaisDoMes(U.mesSeguinte(mes, -1));
+  res.json({
+    tipo, mes,
+    total: transacoes.reduce((a, t) => a + t.valor, 0),
+    total_mes_anterior: tipo === 'receita' ? anterior.receitas : anterior.despesas,
+    categorias: porCategoria(tipo, `${mes}-01`, `${mes}-31`),
+    origens: Object.values(origens).sort((a, b) => b.total - a.total),
+    transacoes,
+  });
+});
 
 r.get('/dashboard', (req, res) => {
   const hoje = U.hojeISO();
