@@ -325,3 +325,7 @@ a.chip { text-decoration: none; }
   .hero-pill small::before { font-weight: 800; }
   .hero-pill { padding: 10px 12px; }
 }
+.btn-pdf { display: flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none; background: var(--ink); color: #fff; justify-self: stretch; }
+.btn-pdf:hover { background: var(--ink-3); }
+@media (prefers-color-scheme: dark) { .btn-pdf { background: var(--mint); color: #04261B; } }
+@media (min-width: 861px) { .btn-pdf { justify-self: start; } }

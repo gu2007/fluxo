@@ -553,6 +553,14 @@ r.get('/relatorios', (req, res) => {
   });
 });
 
+// ---------- extrato mensal em PDF ----------
+r.get('/relatorio.pdf', (req, res) => {
+  const mes = U.ehMes(req.query.mes) ? req.query.mes : U.hojeISO().slice(0, 7);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `${req.query.ver ? 'inline' : 'attachment'}; filename="fluxo-extrato-${mes}.pdf"`);
+  require('./relatorio').gerarPDF(mes, req.session.nome, res);
+});
+
 // ---------- exportar CSV ----------
 r.get('/exportar.csv', (req, res) => {
   const linhas = db.prepare(`${SELECT_TX} ORDER BY t.data, t.id`).all();

@@ -276,6 +276,8 @@
         <div class="card"><h2>Últimos lançamentos <a class="link" href="#/lancamentos">Ver todos</a></h2><div class="lista" id="ult">${d.ultimas.length ? d.ultimas.map((t) => itemTransacao(t, { comData: true })).join('') : vazio('📝', 'Toque em ＋ para lançar.')}</div></div>
       </div>
 
+      <a class="btn btn-pdf" href="/api/relatorio.pdf?mes=${S.mes}" download="fluxo-extrato-${S.mes}.pdf">📄 Baixar extrato de ${nomeMes(S.mes)} (PDF)</a>
+
       ${d.orcamentos.length ? `<div class="card"><h2>Orçamentos do mês <a class="link" href="#/orcamentos">Editar</a></h2><div class="lista">${d.orcamentos.map(barraOrc).join('')}</div></div>` : ''}
     `;
     $('#olho').onclick = () => { S.oculto = !S.oculto; store.set('fluxo.oculto', S.oculto); render(); };
@@ -307,6 +309,7 @@
         <div><small>Balanço</small><b class="${rec - des >= 0 ? 'pos' : 'neg'}">${brl(rec - des, true)}</b></div>
       </div>
       <div class="card" id="lst">${lista.length ? listaPorDia(lista) : vazio('🔍', 'Nenhum lançamento neste mês com esse filtro.')}</div>
+      <a class="btn btn-pdf" href="/api/relatorio.pdf?mes=${S.mes}" download="fluxo-extrato-${S.mes}.pdf">📄 Baixar extrato de ${nomeMes(S.mes)} (PDF)</a>
       <a class="link" href="/api/exportar.csv" style="justify-self:center">⬇ Exportar tudo em planilha (CSV)</a>`;
     $$('[data-f]', el).forEach((b) => (b.onclick = () => { S.filtro.tipo = b.dataset.f; render(); }));
     const busca = $('#busca');
@@ -370,6 +373,7 @@
   async function viewRelatorios(el) {
     const d = await api(`/relatorios?mes=${S.mes}&meses=6`);
     el.innerHTML = `
+      <a class="btn btn-pdf" href="/api/relatorio.pdf?mes=${S.mes}" download="fluxo-extrato-${S.mes}.pdf">📄 Baixar extrato de ${nomeMes(S.mes)} (PDF)</a>
       <div class="card"><h2>Receitas x despesas (6 meses)</h2><div class="chart-box"><canvas id="ch-bar"></canvas></div></div>
       <div class="grid-2">
         <div class="card" id="rel-d"><h2>Para onde foi o dinheiro</h2>${d.despesas_por_categoria.length ? `<div class="chart-box" style="height:200px"><canvas id="ch-d"></canvas></div>${legendaCategorias(d.despesas_por_categoria)}` : vazio('📊', 'Sem despesas no período.')}</div>
